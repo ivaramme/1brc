@@ -63,7 +63,7 @@ public class CalculateAverage_ivaramme {
         int workers = Runtime.getRuntime().availableProcessors();
 
         Map<String, MeasurementAggregator> resultMap = findSegments(workers).stream()
-                .map(segment -> processSegment(segment))
+                .map(segment -> prepareSegmentForProcessing(segment))
                 .parallel()
                 .flatMap(map -> map.entrySet().stream())
                 .collect(Collectors.toMap(Map.Entry::getKey,
@@ -75,7 +75,7 @@ public class CalculateAverage_ivaramme {
                             agg.sum = value1.sum + value2.sum;
                             return agg;
                         }));
-        System.out.println("Results: " + resultMap);
+        // System.out.println("Results: " + resultMap);
         System.out.println("File exploration took: " + (System.currentTimeMillis() - start));
 
         resultMap.forEach((k, v) -> System.out.println("Key: " + k + ", Value: " + v.count));
@@ -87,7 +87,11 @@ public class CalculateAverage_ivaramme {
             long end, int segmentNumber) {
 
         public String toString() {
-            return "Segment # " + segmentNumber + " - start: " + start + ", end: " + end;
+            return "Segment # " + segmentNumber + " - start: " + start + ", end: " + end + ", lenght: " + length();
+        }
+
+        public long length() {
+            return end - start;
         }
     }
 
@@ -110,10 +114,10 @@ public class CalculateAverage_ivaramme {
     private static List<FileSegment> findSegments(int workers) throws FileNotFoundException, IOException {
         try (RandomAccessFile raf = new RandomAccessFile(FILE, "r")) {
             final long size = raf.length();
-            final long chunkSize = size / workers;
+            final long initialChunkSize = size / workers;
 
             long start = 0;
-            long end = chunkSize;
+            long end = initialChunkSize;
             List<FileSegment> segments = new ArrayList<>();
 
             int segmentNumber = 0;
@@ -124,13 +128,13 @@ public class CalculateAverage_ivaramme {
                 }
 
                 System.out.println(
-                        "Looking for segment: " + segmentNumber + " with start: " + start + " and end: " + end
-                                + " Default chunk size: " + chunkSize + " out of a file size of " + size);
+                        "Creating segment: " + segmentNumber + " with start: " + start + " and end: " + end
+                                + " Initial chunk size: " + initialChunkSize + " out of a file size of " + size);
 
                 segments.add(new FileSegment(start, end, segmentNumber));
 
                 start = end;
-                end = Math.min(size, start + chunkSize);
+                end = Math.min(size, start + initialChunkSize);
                 segmentNumber++;
             }
 
@@ -146,14 +150,13 @@ public class CalculateAverage_ivaramme {
      * @param segment metadata of the file segment to process
      * @return
      */
-    private static Map<String, MeasurementAggregator> processSegment(FileSegment segment) {
+    private static Map<String, MeasurementAggregator> prepareSegmentForProcessing(FileSegment segment) {
         try (
                 FileChannel channel = FileChannel.open(Path.of(FILE), StandardOpenOption.READ)) {
-            System.out.println("Processing segment: " + segment);
-            long length = (segment.end - segment.start);
+            System.out.println("Preparing segment: " + segment);
             MappedByteBuffer buffer = channel.map(FileChannel.MapMode.READ_ONLY, segment.start,
-                    length);
-            return processEntries(buffer, segment);
+                    segment.length());
+            return processEntriesInFileSegment(buffer, segment);
         } catch (IOException ioe) {
             System.out.println("Error opening file " + FILE);
         }
@@ -169,7 +172,7 @@ public class CalculateAverage_ivaramme {
      * @param segmentDefinition
      * @return
      */
-    private static Map<String, MeasurementAggregator> processEntries(MappedByteBuffer fileSegment,
+    private static Map<String, MeasurementAggregator> processEntriesInFileSegment(MappedByteBuffer fileSegment,
             FileSegment segmentDefinition) {
         System.out.println("Segment size: " + fileSegment.capacity() + ", number: " + segmentDefinition.segmentNumber
                 + ". Thread name: " + Thread.currentThread().getName());
@@ -182,7 +185,7 @@ public class CalculateAverage_ivaramme {
         int processed = 0;
         while (offset < end) {
             byte b = fileSegment.get();
-            if (b == '\n') {
+            if (b == '\n' || offset + 1 == end) {
                 bb.flip();
 
                 String line = StandardCharsets.UTF_8.decode(bb).toString();
